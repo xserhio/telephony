@@ -8,7 +8,7 @@ export class CallEventsService {
 
   async getAll(username: string, startDate?: string, endDate?: string) {
     let query = `
-            SELECT ce.id AS "event_id",
+            SELECT DISTINCT ce.id AS "event_id",
             ce.status AS "event_status",
             ce.caller_id AS "caller_id",
             ce.timestamp AS "event_timestamp",

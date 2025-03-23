@@ -9,13 +9,8 @@ export class AmiService {
     @Inject(RabbitMQService) private readonly rabbitMQService: RabbitMQService,
   ) {
     this.ami.on('Up', (event) => this.eventHandler(event));
-    this.ami.on('Busy', (event) => this.eventHandler(event));
     this.ami.on('Ring', (event) => this.eventHandler(event));
-    this.ami.on('Idle', (event) => this.eventHandler(event));
     this.ami.on('Hangup', (event) => this.eventHandler(event));
-    this.ami.on('Newexten', (event) => this.eventHandler(event));
-    this.ami.on('VarSet', (event) => this.eventHandler(event));
-    this.ami.on('SoftHangupRequest', (event) => this.eventHandler(event));
   }
 
   eventHandler(event: any) {
