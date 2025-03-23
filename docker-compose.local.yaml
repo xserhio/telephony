@@ -1,0 +1,192 @@
+services:
+  rabbitmq:
+    image: rabbitmq:management-alpine
+    hostname: rabbitmq
+    restart: always
+    networks:
+      - app
+    environment:
+      - RABBITMQ_DEFAULT_USER=admin
+      - RABBITMQ_DEFAULT_PASS=admin
+      - RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS=-rabbit log_levels [{connection,error},{default,error}] disk_free_limit 2147483648
+      - RABBITMQ_MANAGEMENT_USER=admin
+      - RABBITMQ_MANAGEMENT_PASSWORD=admin
+    volumes:
+      - ./rabbitmq:/var/lib/rabbitmq
+    ports:
+      - "3056:15672"
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+  db:
+    image: timescale/timescaledb:2.18.1-pg17
+    environment:
+      - POSTGRES_PASSWORD=password
+    networks:
+      - app
+    volumes:
+      - db_volume:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD", "pg_isready", "-U", "postgres" ]
+      interval: 10s
+      retries: 5
+      timeout: 5s
+      start_period: 30s
+    ports:
+      - "5456:5432"
+  event-writer:
+    build:
+      context: event-writer
+      dockerfile: Dockerfile
+    hostname: event-writer
+    depends_on:
+      event-listener:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+      liquibase:
+        condition: service_completed_successfully
+    environment:
+      - AMPQ_URL=amqp://admin:admin@rabbitmq:5672/
+      - AMPQ_QUE=test
+      - HTTP_PORT=3001
+      - PG_USERNAME=postgres
+      - PG_PASSWORD=password
+      - PG_HOST=db
+      - PG_PORT=5432
+      - PG_DB=postgres
+    restart: always
+    healthcheck:
+      test: [ "CMD", "wget", "--spider", "--quiet", "http://localhost:3001/health" ]
+      interval: 30s
+      retries: 3
+      start_period: 10s
+      timeout: 10s
+    networks:
+      - app
+  event-listener:
+    build:
+      context: event-listener
+      dockerfile: Dockerfile
+    hostname: event-listener
+    depends_on:
+      asterisk:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - AMI_PORT=5038
+      - AMI_HOST=asterisk
+      - AMI_USERNAME=admin
+      - AMI_PASSWORD=password123
+      - AMPQ_URL=amqp://admin:admin@rabbitmq:5672/
+      - AMPQ_QUE=test
+      - HTTP_PORT=3002
+    restart: always
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://localhost:3002/health"]
+      interval: 30s
+      retries: 3
+      start_period: 10s
+      timeout: 10s
+    networks:
+      - app
+  api-gateway:
+    build:
+      context: api-gateway
+      dockerfile: Dockerfile
+    hostname: api-gateway
+    depends_on:
+      event-listener:
+        condition: service_healthy
+      event-writer:
+        condition: service_healthy
+    environment:
+      - PG_USERNAME=postgres
+      - PG_PASSWORD=password
+      - PG_HOST=db
+      - PG_PORT=5432
+      - PG_DB=postgres
+      - JWT_SECRET=test
+      - HTTP_PORT=3003
+    restart: always
+    ports:
+      - "3003:3003"
+    healthcheck:
+        test: ["CMD", "wget", "--spider", "--quiet", "http://localhost:3003/health"]
+        interval: 30s
+        retries: 3
+        start_period: 10s
+        timeout: 10s
+    networks:
+      - app
+  asterisk:
+    hostname: asterisk
+    image: mlan/asterisk:mini-1.1.11
+    networks:
+      - app
+    configs:
+      - source: asterisk_extensions
+        target: /etc/asterisk/extensions.conf
+      - source: asterisk_pjsip
+        target: /etc/asterisk/pjsip.conf
+      - source: asterisk_stasis
+        target: /etc/asterisk/stasis.conf
+      - source: asterisk_conf
+        target: /etc/asterisk/asterisk.conf
+      - source: asterisk_modules
+        target: /etc/asterisk/modules.conf
+      - source: asterisk_manager
+        target: /etc/asterisk/manager.conf
+    volumes:
+      - ./build/asterix/sounds:/var/lib/asterisk/sounds
+    ports:
+      - "5038:5038"
+      - "5060:5060/udp"
+    healthcheck:
+      test: [ "CMD", "asterisk", "-rx", "core show uptime" ]
+      interval: 30s
+      retries: 3
+      start_period: 5s
+      timeout: 10s
+  liquibase:
+    image: liquibase:4.31-alpine
+    hostname: liquibase
+    networks:
+      - app
+    environment:
+      LIQUIBASE_COMMAND_CHANGELOG_FILE: initial.sql
+      LIQUIBASE_COMMAND_DRIVER: org.postgresql.Driver
+      LIQUIBASE_COMMAND_URL: jdbc:postgresql://db:5432/postgres
+      LIQUIBASE_COMMAND_USERNAME: postgres
+      LIQUIBASE_COMMAND_PASSWORD: password
+      LIQUIBASE_COMMAND_DEFAULT_SCHEMA_NAME: public
+      LIQUIBASE_SEARCH_PATH: /liquibase/changelog
+    volumes:
+      - ./build/db/migrations:/liquibase/changelog
+    command: update
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: no
+networks:
+  app:
+    driver: bridge
+configs:
+  asterisk_extensions:
+    file: ./build/asterix/extensions.conf
+  asterisk_pjsip:
+    file: ./build/asterix/pjsip.conf
+  asterisk_stasis:
+    file: ./build/asterix/stasis.conf
+  asterisk_conf:
+    file: ./build/asterix/asterisk.conf
+  asterisk_modules:
+    file: ./build/asterix/modules.conf
+  asterisk_manager:
+    file: ./build/asterix/manager.conf
+volumes:
+  db_volume: {}
